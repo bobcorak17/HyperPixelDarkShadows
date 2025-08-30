@@ -10,7 +10,7 @@ os.environ["SDL_VIDEO_FOREIGN"] = "1"
 import pygame
 
 import sys, math, signal,time
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from PIL import Image, ImageFilter, ImageDraw
 import threading
 import ephem
@@ -38,9 +38,10 @@ CITIES = {
 }
 # state
 running = True
-terminator_surf = None
+terminator_surface = None
 lock = threading.Lock()
 
+#initialize the display
 pygame.init()
 pygame.mouse.set_visible(False)
 screen = pygame.display.set_mode((0, 0), pygame.FULLSCREEN)
@@ -59,39 +60,41 @@ offset_x = (screen_w - img_w) // 2
 offset_y = (screen_h - img_h) // 2
 
 def subsolar_point(dt_utc):
-    """ Compute the subsolar point (lat, lon) in degrees at a given UTC datetime.
-    """
+    """Compute the subsolar point (lat, lon) in degrees at a given UTC datetime using PyEphem."""
     obs = ephem.Observer()
     obs.date = dt_utc
+    obs.lon = '0'   # Greenwich
+    obs.lat = '0'   # Equator
     sun = ephem.Sun(obs)
 
-    # Latitude of subsolar point is Sun's declination
+    # Latitude of subsolar point is just the Sun's declination
     lat_deg = math.degrees(sun.dec)
 
-    # Compute subsolar longitude: RA - GMST
+    # Subsolar longitude = RA - GMST
     ra_deg = math.degrees(sun.ra)
-    jd = ephem.julian_date(dt_utc)
-    gmst = (280.46061837 + 360.98564736629 * (jd - 2451545.0)) % 360
-    lon_deg = (ra_deg - gmst + 540.0) % 360 - 180.0  # normalize to [-180, 180]
+    gmst_deg = math.degrees(obs.sidereal_time())
+    lon_deg = (ra_deg - gmst_deg + 540.0) % 360.0 - 180.0
     return lat_deg, lon_deg
 
 def sublunar_point(dt_utc: datetime):
-    """ Return (lat_deg, lon_deg) of the sublunar point at UTC datetime dt_utc.
+    """Return (lat_deg, lon_deg) of the sublunar point at UTC datetime dt_utc.
     Uses PyEphem for the Moon's apparent geocentric RA/Dec.
     """
     obs = ephem.Observer()
     obs.date = dt_utc
+    obs.lon = '0'   # Greenwich reference
+    obs.lat = '0'   # Equator
     moon = ephem.Moon(obs)
 
     # Latitude of sublunar point is Moon's declination
     lat_deg = math.degrees(moon.dec)
 
-    # Compute sublunar longitude: RA - GMST
+    # Sub-lunar longitude = RA - GMST
     ra_deg = math.degrees(moon.ra)
-    jd = ephem.julian_date(dt_utc)
-    gmst = (280.46061837 + 360.98564736629 * (jd - 2451545.0)) % 360
-    lon_deg = (ra_deg - gmst + 540.0) % 360 - 180.0  # normalize to [-180, 180]
+    gmst_deg = math.degrees(obs.sidereal_time())
+    lon_deg = (ra_deg - gmst_deg + 540.0) % 360.0 - 180.0
     return lat_deg, lon_deg
+
 # -----------------------
 # Day/night mask builder (uses accurate subsolar point)
 # -----------------------
@@ -112,15 +115,18 @@ def generate_terminator_pil(day_img: Image.Image, night_img: Image.Image, dt_utc
     putpixel = mask.putpixel
 
     for y in range(h):
+        #print("===", datetime.now(timezone.utc))
         lat_deg = 90.0 - (y / h) * 180.0
         lat_rad = math.radians(lat_deg)
         cos_lat = math.cos(lat_rad)
         sin_lat = math.sin(lat_rad)
+
         for x in range(w):
             lon_deg = (x / w) * 360.0 - 180.0
             lon_rad = math.radians(lon_deg)
             H = lon_rad - subsolar_lon_rad
             cos_zenith = sin_lat * math.sin(decl_rad) + cos_lat * math.cos(decl_rad) * math.cos(H)
+
             # map cos_zenith to 0..255 with twilight smoothing around 0
             # simple linear mapping with clamping:
             if cos_zenith >= 0.02:
@@ -130,10 +136,13 @@ def generate_terminator_pil(day_img: Image.Image, night_img: Image.Image, dt_utc
             else:
                 # around horizon -0.02..+0.02 -> 0..255
                 val = int((cos_zenith + 0.02) / (0.04) * 255)
-            putpixel((x, y), val)
 
+            putpixel((x, y), val)
+        #print("---", datetime.now(timezone.utc))
+        #print()
     if twilight_blur and twilight_blur > 0:
         mask = mask.filter(ImageFilter.GaussianBlur(radius=twilight_blur))
+
 
     return Image.composite(day_img, night_img, mask)
 
@@ -157,7 +166,7 @@ def draw_markers_on_pil(pil_img, lat, lon, color):
     return
 
 def draw_city_crosses_on_pil(pil_img, cities):
-    """ Draw a red cross over the landmarks in our list on a PIL image.
+    """ Draw a red cross over our landmarks  on a PIL image.
     """
     for name, (lat, lon) in cities.items():
         draw_markers_on_pil(pil_img, lat, lon, color=(255, 0, 0))
@@ -178,7 +187,9 @@ def draw_sublunar_point_on_pil(pil_img, dt_utc, color=(0, 255, 255)):
     return
 
 def update_terminator(surface):
-    global terminator_surf
+    global terminator_surface
+    now = None
+    last_dt = None
 
     while running:
         # load 400x800 images (do not stretch)
@@ -188,7 +199,6 @@ def update_terminator(surface):
         # Only recompute mask when time has advanced enough for smoothness
         # We'll recompute at UPDATE_FPS; keep CPU reasonable
         now = datetime.now(timezone.utc)
-        last_dt = None
 
         if surface is None or last_dt is None or (now - last_dt).total_seconds() >= 1.0/UPDATE_FPS:
             pil_with_crosses = generate_terminator_pil(day_img, night_img, now, twilight_blur=TWILIGHT_BLUR_RADIUS)
@@ -202,9 +212,9 @@ def update_terminator(surface):
 
             surf = pygame.image.fromstring(pil_with_crosses.tobytes(), pil_with_crosses.size, pil_with_crosses.mode)
             with lock:
-                terminator_surf = surf
-            time.sleep(UPDATE_FPS)
-        return
+                terminator_surface = surf
+            time.sleep(1.0 / UPDATE_FPS)
+    return
 
 # -----------------------
 # Main program
@@ -227,15 +237,12 @@ def main():
             elif ev.type == pygame.KEYDOWN:
                 if ev.key in (pygame.K_q, pygame.K_ESCAPE):
                     running = False
-                elif ev.key == pygame.K_r:
-                    pygame.quit()
-                    os.system("sudo reboot now")
 
-        if terminator_surf:
+        if terminator_surface:
             with lock:
                 # draw centered with black background
                 screen.fill((0,0,0))
-                screen.blit(terminator_surf, (offset_x, offset_y))
+                screen.blit(terminator_surface, (offset_x, offset_y))
                 pygame.display.flip()
 
         clock.tick(UPDATE_FPS)
