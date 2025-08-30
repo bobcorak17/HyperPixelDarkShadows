@@ -9,9 +9,10 @@ os.environ["SDL_VIDEO_WINDOW_POS"] = "0,0"
 os.environ["SDL_VIDEO_FOREIGN"] = "1"
 import pygame
 
-import sys, math, signal
-from datetime import datetime, timezone, timedelta
+import sys, math, signal,time
+from datetime import datetime, timezone
 from PIL import Image, ImageFilter, ImageDraw
+import threading
 import ephem
 
 # -----------------------
@@ -35,6 +36,27 @@ CITIES = {
     "João Pessoa": (-7.115, -34.86306),
     "Cape Town": (-33.917419, 18.386274),
 }
+# state
+running = True
+terminator_surf = None
+lock = threading.Lock()
+
+pygame.init()
+pygame.mouse.set_visible(False)
+screen = pygame.display.set_mode((0, 0), pygame.FULLSCREEN)
+SCREEN_SIZE = screen.get_size()
+screen_w, screen_h = SCREEN_SIZE
+
+clock = pygame.time.Clock()
+
+# -----------------------------
+# Load images
+# -----------------------------
+day_img   = Image.open(DAY_IMAGE_PATH).convert("RGB")
+night_img = Image.open(NIGHT_IMAGE_PATH).convert("RGB")
+img_w, img_h = day_img.size
+offset_x = (screen_w - img_w) // 2
+offset_y = (screen_h - img_h) // 2
 
 def subsolar_point(dt_utc):
     """ Compute the subsolar point (lat, lon) in degrees at a given UTC datetime.
@@ -113,8 +135,7 @@ def generate_terminator_pil(day_img: Image.Image, night_img: Image.Image, dt_utc
     if twilight_blur and twilight_blur > 0:
         mask = mask.filter(ImageFilter.GaussianBlur(radius=twilight_blur))
 
-    comp = Image.composite(day_img, night_img, mask)
-    return comp
+    return Image.composite(day_img, night_img, mask)
 
 # -----------------------
 # Utility: center PIL image on pygame screen
@@ -156,40 +177,48 @@ def draw_sublunar_point_on_pil(pil_img, dt_utc, color=(0, 255, 255)):
     draw_markers_on_pil(pil_img, lat, lon, color=(0, 255, 255))
     return
 
+def update_terminator(surface):
+    global terminator_surf
+
+    while running:
+        # load 400x800 images (do not stretch)
+        day_img = Image.open(DAY_IMAGE_PATH).convert("RGB")
+        night_img = Image.open(NIGHT_IMAGE_PATH).convert("RGB")
+
+        # Only recompute mask when time has advanced enough for smoothness
+        # We'll recompute at UPDATE_FPS; keep CPU reasonable
+        now = datetime.now(timezone.utc)
+        last_dt = None
+
+        if surface is None or last_dt is None or (now - last_dt).total_seconds() >= 1.0/UPDATE_FPS:
+            pil_with_crosses = generate_terminator_pil(day_img, night_img, now, twilight_blur=TWILIGHT_BLUR_RADIUS)
+            # draw crosses on a copy so the base day/night remains pristine
+            #pil_with_crosses = pil_comp.copy()
+            draw_city_crosses_on_pil(pil_with_crosses, CITIES)
+            draw_subsolar_point_on_pil(pil_with_crosses, now)
+            draw_sublunar_point_on_pil(pil_with_crosses, now)
+            surface = pil_to_pygame_surface(pil_with_crosses)
+            last_dt = now
+
+            surf = pygame.image.fromstring(pil_with_crosses.tobytes(), pil_with_crosses.size, pil_with_crosses.mode)
+            with lock:
+                terminator_surf = surf
+            time.sleep(UPDATE_FPS)
+        return
+
 # -----------------------
 # Main program
 # -----------------------
 def main():
-    # initialize pygame (after env var set)
-    pygame.init()
-    pygame.mouse.set_visible(False)
-    screen = pygame.display.set_mode((0,0), pygame.FULLSCREEN)
-    screen_w, screen_h = screen.get_size()
-
-    # load 400x800 images (do not stretch)
-    day_img = Image.open(DAY_IMAGE_PATH).convert("RGB")
-    night_img = Image.open(NIGHT_IMAGE_PATH).convert("RGB")
-    if day_img.size != night_img.size:
-        print("day/night images must be same size", file=sys.stderr)
-        return
-
-    img_w, img_h = day_img.size
-    offset_x = (screen_w - img_w)//2
-    offset_y = (screen_h - img_h)//2
-
-    # state
-    running = True
-    time_offset_hours = 0  # toggled by T
-    clock = pygame.time.Clock()
-
     # handle SIGTERM cleanly
     def _sigterm(sig, frame):
-        nonlocal running
+        #nonlocal running
         running = False
     signal.signal(signal.SIGTERM, _sigterm)
 
-    last_dt = None
     current_surface = None
+    global running
+    threading.Thread(target=update_terminator, kwargs={"surface": current_surface}, daemon=True).start()
 
     while running:
         for ev in pygame.event.get():
@@ -202,24 +231,12 @@ def main():
                     pygame.quit()
                     os.system("sudo reboot now")
 
-        now = datetime.now(timezone.utc) + timedelta(hours=time_offset_hours)
-
-        # Only recompute mask when time has advanced enough for smoothness
-        # We'll recompute at UPDATE_FPS; keep CPU reasonable
-        if current_surface is None or last_dt is None or (now - last_dt).total_seconds() >= 1.0/UPDATE_FPS:
-            pil_with_crosses = generate_terminator_pil(day_img, night_img, now, twilight_blur=TWILIGHT_BLUR_RADIUS)
-            # draw crosses on a copy so the base day/night remains pristine
-            #pil_with_crosses = pil_comp.copy()
-            draw_city_crosses_on_pil(pil_with_crosses, CITIES)
-            draw_subsolar_point_on_pil(pil_with_crosses, now)
-            draw_sublunar_point_on_pil(pil_with_crosses, now)
-            current_surface = pil_to_pygame_surface(pil_with_crosses)
-            last_dt = now
-
-        # draw centered with black background
-        screen.fill((0,0,0))
-        screen.blit(current_surface, (offset_x, offset_y))
-        pygame.display.flip()
+        if terminator_surf:
+            with lock:
+                # draw centered with black background
+                screen.fill((0,0,0))
+                screen.blit(terminator_surf, (offset_x, offset_y))
+                pygame.display.flip()
 
         clock.tick(UPDATE_FPS)
 
