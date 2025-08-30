@@ -1,5 +1,5 @@
-#!/usr/bin/env python3
-# DarkShadows.py — accurate sun position, correct eastward motion of terminator
+#!/home/pi/HyperPixel/.venv/bin/python3
+# DarkShadows.py
 
 import os
 # must set this BEFORE importing pygame
@@ -36,104 +36,9 @@ CITIES = {
     "Cape Town": (-33.917419, 18.386274),
 }
 
-# -----------------------
-# Astronomical helpers (Meeus-style approximate)
-# -----------------------
-def datetime_to_julian_day(dt: datetime) -> float:
-    """Convert timezone-aware UTC datetime to Julian Day (floating)."""
-    # algorithm: convert to UTC JD with epoch 2000-01-01 12:00 = 2451545.0
-    # Use POSIX seconds relative to J2000 for robustness:
-    # JD = 2451545.0 + (dt_utc - 2000-01-01T12:00Z).total_seconds()/86400
-    j2000 = datetime(2000, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
-    delta_seconds = (dt - j2000).total_seconds()
-    return 2451545.0 + delta_seconds / 86400.0
-
-def sun_ecliptic_longitude_and_declination(dt: datetime):
-    """
-    Approximate Sun ecliptic longitude (lambda) and declination (delta) in radians.
-    Uses a simple low-cost formula adequate for visualization (Meeus/NOAA style).
-    Returns (lambda_rad, decl_rad).
-    """
-    JD = datetime_to_julian_day(dt)
-    n = JD - 2451545.0  # days since J2000.0
-
-    # mean longitude of the Sun (deg) and mean anomaly (deg)
-    L = (280.46061837 + 0.98564736629 * n) % 360.0
-    g = (357.52772333 + 0.9856002831 * n) % 360.0
-
-    # convert to radians
-    Lr = math.radians(L)
-    gr = math.radians(g)
-
-    # ecliptic longitude lambda (approx)
-    lambda_deg = L + 1.914602 - 0.004817 * math.cos(gr) + 0.000014 * math.sin(2*gr)
-    # better expression using periodic terms:
-    lambda_deg = L + 1.915 * math.sin(gr) + 0.020 * math.sin(2*gr)
-    lambdar = math.radians(lambda_deg % 360.0)
-
-    # obliquity of the ecliptic (approx, degrees -> radians)
-    eps_deg = 23.439291 - 0.0000004 * n
-    epsr = math.radians(eps_deg)
-
-    # declination δ = arcsin( sin(eps) * sin(lambda) )
-    decl = math.asin(math.sin(epsr) * math.sin(lambdar))
-
-    return lambdar, decl
-
-def sun_ra_in_degrees(lambda_rad, epsr):
-    """
-    Compute Sun's right ascension (RA) in degrees from ecliptic longitude lambda_rad and obliquity epsr.
-    RA = atan2(cos(eps)*sin(lambda), cos(lambda))
-    """
-    x = math.cos(epsr) * math.sin(lambda_rad)
-    y = math.cos(lambda_rad)
-    ra = math.degrees(math.atan2(x, y))  # atan2(sinλ cosε, cosλ)
-    ra = ra % 360.0
-    return ra
-
-def greenwich_mean_sidereal_time_degrees(JD):
-    """
-    GMST in degrees for Julian Day JD.
-    Uses standard formula (approx).
-    """
-    # from Meeus: GMST = 280.46061837 + 360.98564736629*(JD - 2451545) + 0.000387933*T^2 - T^3/38710000
-    T = (JD - 2451545.0) / 36525.0
-    gmst = 280.46061837 + 360.98564736629 * (JD - 2451545.0) + 0.000387933 * T*T - (T**3) / 38710000.0
-    return gmst % 360.0
-
 def subsolar_point(dt_utc):
+    """ Compute the subsolar point (lat, lon) in degrees at a given UTC datetime.
     """
-    Compute the subsolar point (lat, lon) in degrees at a given UTC datetime.
-    """
-    # Julian Day
-    jd = (dt_utc - datetime(2000, 1, 1, 12, tzinfo=timezone.utc)).total_seconds() / 86400.0 + 2451545.0
-    n = jd - 2451545.0
-
-    # Mean longitude of the Sun (deg)
-    L = (280.460 + 0.9856474 * n) % 360.0
-    # Mean anomaly (rad)
-    g = math.radians((357.528 + 0.9856003 * n) % 360.0)
-    # # Ecliptic longitude (rad)
-    # lambda_sun = math.radians(L + 1.915 * math.sin(g) + 0.020 * math.sin(2*g))
-    #
-    # # Obliquity of the ecliptic (rad)
-    # epsilon = math.radians(23.439 - 0.0000004 * n)
-    #
-    # # Declination of the Sun (lat of subsolar point, deg)
-    # decl_rad = math.asin(math.sin(epsilon) * math.sin(lambda_sun))
-    # lat_deg = math.degrees(decl_rad)
-    #
-    # # Right Ascension
-    # ra = math.atan2(math.cos(epsilon) * math.sin(lambda_sun), math.cos(lambda_sun))
-    # ra_deg = math.degrees(ra) % 360.0
-    #
-    # # Greenwich Mean Sidereal Time
-    # GMST = (280.46061837 + 360.98564736629 * n) % 360.0
-    #
-    # # Subsolar longitude = RA - GMST
-    # lon_deg = (ra_deg - GMST + 540.0) % 360.0 - 180.0
-    #
-    # return lat_deg, lon_deg
     obs = ephem.Observer()
     obs.date = dt_utc
     sun = ephem.Sun(obs)
@@ -146,33 +51,17 @@ def subsolar_point(dt_utc):
     jd = ephem.julian_date(dt_utc)
     gmst = (280.46061837 + 360.98564736629 * (jd - 2451545.0)) % 360
     lon_deg = (ra_deg - gmst + 540.0) % 360 - 180.0  # normalize to [-180, 180]
-
     return lat_deg, lon_deg
 
 def sublunar_point(dt_utc: datetime):
-    """
-    Return (lat_deg, lon_deg) of the sublunar point at UTC datetime dt_utc.
+    """ Return (lat_deg, lon_deg) of the sublunar point at UTC datetime dt_utc.
     Uses PyEphem for the Moon's apparent geocentric RA/Dec.
     """
-    # jd = datetime_to_julian_day(dt_utc)
-    # gmst = greenwich_mean_sidereal_time_degrees(jd)
-    #
-    # moon = ephem.Moon()
-    # moon.compute(dt_utc)              # geocentric apparent RA/Dec at dt_utc
-    # ra_deg  = math.degrees(float(moon.ra))   # RA in degrees
-    # dec_deg = math.degrees(float(moon.dec))  # Dec in degrees
-    #
-    # # Sub-Earth longitude of the Moon (normalize to (-180,180])
-    # lon = (ra_deg - gmst + 540.0) % 360.0 - 180.0
-    # lat = dec_deg
-    #
-    # return lat, lon
     obs = ephem.Observer()
     obs.date = dt_utc
-
     moon = ephem.Moon(obs)
 
-    # Latitude and longitude in degrees
+    # Latitude of sublunar point is Moon's declination
     lat_deg = math.degrees(moon.dec)
 
     # Compute sublunar longitude: RA - GMST
@@ -180,9 +69,6 @@ def sublunar_point(dt_utc: datetime):
     jd = ephem.julian_date(dt_utc)
     gmst = (280.46061837 + 360.98564736629 * (jd - 2451545.0)) % 360
     lon_deg = (ra_deg - gmst + 540.0) % 360 - 180.0  # normalize to [-180, 180]
-
-    return lat_deg, lon_deg
-
     return lat_deg, lon_deg
 # -----------------------
 # Day/night mask builder (uses accurate subsolar point)
@@ -270,6 +156,7 @@ def draw_sublunar_point_on_pil(pil_img, dt_utc, color=(0, 255, 255)):
     lat, lon = sublunar_point(dt_utc)
     draw_cross_on_pil(pil_img, lat, lon, color=(0, 255, 255))
     return
+
 # -----------------------
 # Main program
 # -----------------------
@@ -315,15 +202,8 @@ def main():
                 elif ev.key == pygame.K_r:
                     pygame.quit()
                     os.system("sudo reboot now")
-                elif ev.key == pygame.K_t:
-                    time_offset_hours = 12 if time_offset_hours == 0 else 0
-                    current_surface = None  # force redraw
 
         now = datetime.now(timezone.utc) + timedelta(hours=time_offset_hours)
-        '''# Hard-code local time (e.g. 2025-08-29 20:00 local)
-        local_time = datetime(2025, 8, 29, 21, 0)
-        # Convert to UTC
-        now = local_time.astimezone(timezone.utc)'''
 
         # Only recompute mask when time has advanced enough for smoothness
         # We'll recompute at UPDATE_FPS; keep CPU reasonable
