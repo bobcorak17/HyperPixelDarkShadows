@@ -144,8 +144,8 @@ def subsolar_point(dt_utc):
     # Compute subsolar longitude: RA - GMST
     ra_deg = math.degrees(sun.ra)
     jd = ephem.julian_date(dt_utc)
-    GMST = (280.46061837 + 360.98564736629 * (jd - 2451545.0)) % 360
-    lon_deg = (ra_deg - GMST + 540.0) % 360 - 180.0  # normalize to [-180, 180]
+    gmst = (280.46061837 + 360.98564736629 * (jd - 2451545.0)) % 360
+    lon_deg = (ra_deg - gmst + 540.0) % 360 - 180.0  # normalize to [-180, 180]
 
     return lat_deg, lon_deg
 
@@ -154,19 +154,36 @@ def sublunar_point(dt_utc: datetime):
     Return (lat_deg, lon_deg) of the sublunar point at UTC datetime dt_utc.
     Uses PyEphem for the Moon's apparent geocentric RA/Dec.
     """
-    jd = datetime_to_julian_day(dt_utc)
-    gmst = greenwich_mean_sidereal_time_degrees(jd)
+    # jd = datetime_to_julian_day(dt_utc)
+    # gmst = greenwich_mean_sidereal_time_degrees(jd)
+    #
+    # moon = ephem.Moon()
+    # moon.compute(dt_utc)              # geocentric apparent RA/Dec at dt_utc
+    # ra_deg  = math.degrees(float(moon.ra))   # RA in degrees
+    # dec_deg = math.degrees(float(moon.dec))  # Dec in degrees
+    #
+    # # Sub-Earth longitude of the Moon (normalize to (-180,180])
+    # lon = (ra_deg - gmst + 540.0) % 360.0 - 180.0
+    # lat = dec_deg
+    #
+    # return lat, lon
+    obs = ephem.Observer()
+    obs.date = dt_utc
 
-    moon = ephem.Moon()
-    moon.compute(dt_utc)              # geocentric apparent RA/Dec at dt_utc
-    ra_deg  = math.degrees(float(moon.ra))   # RA in degrees
-    dec_deg = math.degrees(float(moon.dec))  # Dec in degrees
+    moon = ephem.Moon(obs)
 
-    # Sub-Earth longitude of the Moon (normalize to (-180,180])
-    lon = (ra_deg - gmst + 540.0) % 360.0 - 180.0
-    lat = dec_deg
+    # Latitude and longitude in degrees
+    lat_deg = math.degrees(moon.dec)
 
-    return lat, lon
+    # Compute sublunar longitude: RA - GMST
+    ra_deg = math.degrees(moon.ra)
+    jd = ephem.julian_date(dt_utc)
+    gmst = (280.46061837 + 360.98564736629 * (jd - 2451545.0)) % 360
+    lon_deg = (ra_deg - gmst + 540.0) % 360 - 180.0  # normalize to [-180, 180]
+
+    return lat_deg, lon_deg
+
+    return lat_deg, lon_deg
 # -----------------------
 # Day/night mask builder (uses accurate subsolar point)
 # -----------------------
