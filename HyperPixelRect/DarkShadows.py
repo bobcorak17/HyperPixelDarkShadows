@@ -113,25 +113,39 @@ def subsolar_point(dt_utc):
     L = (280.460 + 0.9856474 * n) % 360.0
     # Mean anomaly (rad)
     g = math.radians((357.528 + 0.9856003 * n) % 360.0)
-    # Ecliptic longitude (rad)
-    lambda_sun = math.radians(L + 1.915 * math.sin(g) + 0.020 * math.sin(2*g))
+    # # Ecliptic longitude (rad)
+    # lambda_sun = math.radians(L + 1.915 * math.sin(g) + 0.020 * math.sin(2*g))
+    #
+    # # Obliquity of the ecliptic (rad)
+    # epsilon = math.radians(23.439 - 0.0000004 * n)
+    #
+    # # Declination of the Sun (lat of subsolar point, deg)
+    # decl_rad = math.asin(math.sin(epsilon) * math.sin(lambda_sun))
+    # lat_deg = math.degrees(decl_rad)
+    #
+    # # Right Ascension
+    # ra = math.atan2(math.cos(epsilon) * math.sin(lambda_sun), math.cos(lambda_sun))
+    # ra_deg = math.degrees(ra) % 360.0
+    #
+    # # Greenwich Mean Sidereal Time
+    # GMST = (280.46061837 + 360.98564736629 * n) % 360.0
+    #
+    # # Subsolar longitude = RA - GMST
+    # lon_deg = (ra_deg - GMST + 540.0) % 360.0 - 180.0
+    #
+    # return lat_deg, lon_deg
+    obs = ephem.Observer()
+    obs.date = dt_utc
+    sun = ephem.Sun(obs)
 
-    # Obliquity of the ecliptic (rad)
-    epsilon = math.radians(23.439 - 0.0000004 * n)
+    # Latitude of subsolar point is Sun's declination
+    lat_deg = math.degrees(sun.dec)
 
-    # Declination of the Sun (lat of subsolar point, deg)
-    decl_rad = math.asin(math.sin(epsilon) * math.sin(lambda_sun))
-    lat_deg = math.degrees(decl_rad)
-
-    # Right Ascension
-    ra = math.atan2(math.cos(epsilon) * math.sin(lambda_sun), math.cos(lambda_sun))
-    ra_deg = math.degrees(ra) % 360.0
-
-    # Greenwich Mean Sidereal Time
-    GMST = (280.46061837 + 360.98564736629 * n) % 360.0
-
-    # Subsolar longitude = RA - GMST
-    lon_deg = (ra_deg - GMST + 540.0) % 360.0 - 180.0
+    # Compute subsolar longitude: RA - GMST
+    ra_deg = math.degrees(sun.ra)
+    jd = ephem.julian_date(dt_utc)
+    GMST = (280.46061837 + 360.98564736629 * (jd - 2451545.0)) % 360
+    lon_deg = (ra_deg - GMST + 540.0) % 360 - 180.0  # normalize to [-180, 180]
 
     return lat_deg, lon_deg
 
