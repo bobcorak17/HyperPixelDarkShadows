@@ -19,8 +19,8 @@ import ephem
 # -----------------------
 DAY_IMAGE_PATH   = "day.jpg"    # your 400x800 day image
 NIGHT_IMAGE_PATH = "night.jpg"  # your 400x800 night image
-TWILIGHT_BLUR_RADIUS = 4       # set 0 to disable
-UPDATE_FPS = 10                # update redraws per second (10 is a good compromise)
+TWILIGHT_BLUR_RADIUS = 4        # set 0 to disable
+UPDATE_FPS = 10                 # update redraws per second (10 is a good compromise)
 
 CITIES = {
     "Null Island": (0.0, 0.0),
@@ -79,8 +79,6 @@ def generate_terminator_pil(day_img: Image.Image, night_img: Image.Image, dt_utc
     day_img and night_img must be the same size (400x800).
     """
     w, h = day_img.size
-    #subsolar_lon_deg, decl_rad = compute_subsolar_lon_and_decl(dt_utc) #todo:remove
-    #subsolar_lon_rad = math.radians(subsolar_lon_deg)                  #todo:remove
     lat_deg, lon_deg = subsolar_point(dt_utc)
 
     # Convert for math
@@ -90,6 +88,7 @@ def generate_terminator_pil(day_img: Image.Image, night_img: Image.Image, dt_utc
     # create 'L' mask (0..255) using cos zenith
     mask = Image.new("L", (w, h))
     putpixel = mask.putpixel
+
     for y in range(h):
         lat_deg = 90.0 - (y / h) * 180.0
         lat_rad = math.radians(lat_deg)
@@ -123,7 +122,7 @@ def generate_terminator_pil(day_img: Image.Image, night_img: Image.Image, dt_utc
 def pil_to_pygame_surface(pil_img):
     return pygame.image.fromstring(pil_img.tobytes(), pil_img.size, pil_img.mode)
 
-def draw_cross_on_pil(pil_img, lat, lon, color):
+def draw_markers_on_pil(pil_img, lat, lon, color):
     """ Draw a cross on a PIL image.
     """
     draw = ImageDraw.Draw(pil_img)
@@ -140,21 +139,21 @@ def draw_city_crosses_on_pil(pil_img, cities):
     """ Draw a red cross over the landmarks in our list on a PIL image.
     """
     for name, (lat, lon) in cities.items():
-        draw_cross_on_pil(pil_img, lat, lon, color=(255, 0, 0))
+        draw_markers_on_pil(pil_img, lat, lon, color=(255, 0, 0))
     return
 
 def draw_subsolar_point_on_pil(pil_img, dt_utc, color=(255, 255, 0)):
     """ Draw a yellow cross where the sun is directly overhead (subsolar point) on a PIL image.
     """
     lat, lon = subsolar_point(dt_utc)
-    draw_cross_on_pil(pil_img, lat, lon, color=(255, 255, 0))
+    draw_markers_on_pil(pil_img, lat, lon, color=(255, 255, 0))
     return
 
 def draw_sublunar_point_on_pil(pil_img, dt_utc, color=(0, 255, 255)):
     """Draw a cyan cross where the moon is directly overhead (sublunar point) on a PIL image.
     """
     lat, lon = sublunar_point(dt_utc)
-    draw_cross_on_pil(pil_img, lat, lon, color=(0, 255, 255))
+    draw_markers_on_pil(pil_img, lat, lon, color=(0, 255, 255))
     return
 
 # -----------------------
@@ -208,9 +207,9 @@ def main():
         # Only recompute mask when time has advanced enough for smoothness
         # We'll recompute at UPDATE_FPS; keep CPU reasonable
         if current_surface is None or last_dt is None or (now - last_dt).total_seconds() >= 1.0/UPDATE_FPS:
-            pil_comp = generate_terminator_pil(day_img, night_img, now, twilight_blur=TWILIGHT_BLUR_RADIUS)
+            pil_with_crosses = generate_terminator_pil(day_img, night_img, now, twilight_blur=TWILIGHT_BLUR_RADIUS)
             # draw crosses on a copy so the base day/night remains pristine
-            pil_with_crosses = pil_comp.copy()
+            #pil_with_crosses = pil_comp.copy()
             draw_city_crosses_on_pil(pil_with_crosses, CITIES)
             draw_subsolar_point_on_pil(pil_with_crosses, now)
             draw_sublunar_point_on_pil(pil_with_crosses, now)
@@ -225,6 +224,7 @@ def main():
         clock.tick(UPDATE_FPS)
 
     pygame.quit()
+    sys.exit(0)
 
 if __name__ == "__main__":
     main()
