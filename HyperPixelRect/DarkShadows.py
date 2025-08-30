@@ -13,6 +13,7 @@ import sys, math, signal,time
 from datetime import datetime, timezone, timedelta
 from PIL import Image, ImageFilter, ImageDraw
 import threading
+import numpy as np
 import ephem
 
 # -----------------------
@@ -36,6 +37,7 @@ CITIES = {
     "João Pessoa": (-7.115, -34.86306),
     "Cape Town": (-33.917419, 18.386274),
 }
+
 # state
 running = True
 terminator_surface = None
@@ -95,61 +97,66 @@ def sublunar_point(dt_utc: datetime):
     lon_deg = (ra_deg - gmst_deg + 540.0) % 360.0 - 180.0
     return lat_deg, lon_deg
 
-# -----------------------
-# Day/night mask builder (uses accurate subsolar point)
-# -----------------------
-def generate_terminator_pil(day_img: Image.Image, night_img: Image.Image, dt_utc: datetime, twilight_blur=TWILIGHT_BLUR_RADIUS):
+def generate_terminator_pil(day_img: Image.Image,
+                            night_img: Image.Image,
+                            dt_utc,
+                            twilight_blur=TWILIGHT_BLUR_RADIUS):
     """
-    Build a PIL.Image composite (RGB) for the given UTC datetime using accurate sun position.
-    day_img and night_img must be the same size (400x800).
+    Vectorized generation of day/night terminator for 400x800 images.
+    Returns a PIL.Image with blended day/night and twilight smoothing.
     """
+    print("===", datetime.now(timezone.utc))
     w, h = day_img.size
-    lat_deg, lon_deg = subsolar_point(dt_utc)
 
-    # Convert for math
-    decl_rad = math.radians(lat_deg)
-    subsolar_lon_rad = math.radians(lon_deg)
+    # Create arrays for lat/lon per pixel
+    x = np.linspace(-180, 180, w)
+    y = np.linspace(90, -90, h)  # top=+90°, bottom=-90°
+    lon_grid, lat_grid = np.meshgrid(x, y)
 
-    # create 'L' mask (0..255) using cos zenith
-    mask = Image.new("L", (w, h))
-    putpixel = mask.putpixel
+    # Compute cosine of solar zenith angle using ephem subsolar point
+    obs = ephem.Observer()
+    obs.date = dt_utc
+    sun = ephem.Sun(obs)
+    decl_rad = float(sun.dec)
+    ra_rad = float(sun.ra)
 
-    for y in range(h):
-        #print("===", datetime.now(timezone.utc))
-        lat_deg = 90.0 - (y / h) * 180.0
-        lat_rad = math.radians(lat_deg)
-        cos_lat = math.cos(lat_rad)
-        sin_lat = math.sin(lat_rad)
+    # GMST
+    jd = ephem.julian_date(dt_utc)
+    gmst_deg = (280.46061837 + 360.98564736629 * (jd - 2451545.0)) % 360
+    gmst_rad = math.radians(gmst_deg)
 
-        for x in range(w):
-            lon_deg = (x / w) * 360.0 - 180.0
-            lon_rad = math.radians(lon_deg)
-            H = lon_rad - subsolar_lon_rad
-            cos_zenith = sin_lat * math.sin(decl_rad) + cos_lat * math.cos(decl_rad) * math.cos(H)
+    subsolar_lon_rad = ra_rad - gmst_rad
 
-            # map cos_zenith to 0..255 with twilight smoothing around 0
-            # simple linear mapping with clamping:
-            if cos_zenith >= 0.02:
-                val = 255
-            elif cos_zenith <= -0.02:
-                val = 0
-            else:
-                # around horizon -0.02..+0.02 -> 0..255
-                val = int((cos_zenith + 0.02) / (0.04) * 255)
+    lat_rad = np.radians(lat_grid)
+    lon_rad = np.radians(lon_grid)
+    H = lon_rad - subsolar_lon_rad
+    cos_zenith = np.sin(lat_rad) * math.sin(decl_rad) + np.cos(lat_rad) * np.cos(decl_rad) * np.cos(H)
 
-            putpixel((x, y), val)
-        #print("---", datetime.now(timezone.utc))
-        #print()
-    if twilight_blur and twilight_blur > 0:
-        mask = mask.filter(ImageFilter.GaussianBlur(radius=twilight_blur))
+    # Map cos_zenith to 0..255 with twilight smoothing
+    # Linear ramp from -0.02..+0.02
+    mask_array = np.clip((cos_zenith + 0.02) / 0.04, 0.0, 1.0) * 255
+    mask_array = mask_array.astype(np.uint8)
+
+    # Apply Gaussian blur for twilight transition
+    mask_img = Image.fromarray(mask_array, mode="L")
+    if twilight_blur > 0:
+        mask_img = mask_img.filter(ImageFilter.GaussianBlur(radius=twilight_blur))
+
+    # Blend day/night images
+    day_arr = np.array(day_img, dtype=np.uint8)
+    night_arr = np.array(night_img, dtype=np.uint8)
+    mask_arr = np.array(mask_img, dtype=np.float32) / 255.0  # normalize 0..1
+
+    blended_arr = (day_arr * mask_arr[..., None] + night_arr * (1 - mask_arr[..., None])).astype(np.uint8)
+    blended_img = Image.fromarray(blended_arr)
+    print("---", datetime.now(timezone.utc))
+    print()
+    return blended_img
 
 
-    return Image.composite(day_img, night_img, mask)
-
-# -----------------------
-# Utility: center PIL image on pygame screen
-# -----------------------
 def pil_to_pygame_surface(pil_img):
+    """ Utility: center PIL image on pygame screen
+    """
     return pygame.image.fromstring(pil_img.tobytes(), pil_img.size, pil_img.mode)
 
 def draw_markers_on_pil(pil_img, lat, lon, color):
@@ -198,7 +205,15 @@ def update_terminator(surface):
 
         # Only recompute mask when time has advanced enough for smoothness
         # We'll recompute at UPDATE_FPS; keep CPU reasonable
+
+        # this option: use this for normal operation
         now = datetime.now(timezone.utc)
+
+        # or this option: use this for animation
+        # if now is None:
+        #     now = datetime.now(timezone.utc)
+        # else:
+        #     now = now + timedelta(days=2)
 
         if surface is None or last_dt is None or (now - last_dt).total_seconds() >= 1.0/UPDATE_FPS:
             pil_with_crosses = generate_terminator_pil(day_img, night_img, now, twilight_blur=TWILIGHT_BLUR_RADIUS)
