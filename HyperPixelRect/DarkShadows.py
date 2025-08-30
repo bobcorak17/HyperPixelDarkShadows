@@ -23,6 +23,9 @@ DAY_IMAGE_PATH   = "day.jpg"    # your 400x800 day image
 NIGHT_IMAGE_PATH = "night.jpg"  # your 400x800 night image
 TWILIGHT_BLUR_RADIUS = 4        # set 0 to disable
 UPDATE_FPS = 10                 # update redraws per second (10 is a good compromise)
+NORMAL_OPS = True
+ANIMATION = not NORMAL_OPS
+ANIMATION_INTERVAL = timedelta(days=1)
 
 CITIES = {
     "Null Island": (0.0, 0.0),
@@ -105,7 +108,7 @@ def generate_terminator_pil(day_img: Image.Image,
     Vectorized generation of day/night terminator for 400x800 images.
     Returns a PIL.Image with blended day/night and twilight smoothing.
     """
-    print("===", datetime.now(timezone.utc))
+    ####print("===", datetime.now(timezone.utc))
     w, h = day_img.size
 
     # Create arrays for lat/lon per pixel
@@ -149,8 +152,8 @@ def generate_terminator_pil(day_img: Image.Image,
 
     blended_arr = (day_arr * mask_arr[..., None] + night_arr * (1 - mask_arr[..., None])).astype(np.uint8)
     blended_img = Image.fromarray(blended_arr)
-    print("---", datetime.now(timezone.utc))
-    print()
+    ###print("---", datetime.now(timezone.utc))
+    ###print()
     return blended_img
 
 
@@ -199,35 +202,31 @@ def update_terminator(surface):
     last_dt = None
 
     while running:
-        # load 400x800 images (do not stretch)
-        day_img = Image.open(DAY_IMAGE_PATH).convert("RGB")
-        night_img = Image.open(NIGHT_IMAGE_PATH).convert("RGB")
+        if NORMAL_OPS:
+            now = datetime.now(timezone.utc)
+
+        elif ANIMATION:
+            if now is None:
+                now = datetime.now(timezone.utc)
+            else:
+                now = now + ANIMATION_INTERVAL
 
         # Only recompute mask when time has advanced enough for smoothness
         # We'll recompute at UPDATE_FPS; keep CPU reasonable
-
-        # this option: use this for normal operation
-        now = datetime.now(timezone.utc)
-
-        # or this option: use this for animation
-        # if now is None:
-        #     now = datetime.now(timezone.utc)
-        # else:
-        #     now = now + timedelta(days=2)
-
         if surface is None or last_dt is None or (now - last_dt).total_seconds() >= 1.0/UPDATE_FPS:
-            pil_with_crosses = generate_terminator_pil(day_img, night_img, now, twilight_blur=TWILIGHT_BLUR_RADIUS)
+            pil_for_map = generate_terminator_pil(day_img, night_img, now, twilight_blur=TWILIGHT_BLUR_RADIUS)
             # draw crosses on a copy so the base day/night remains pristine
-            #pil_with_crosses = pil_comp.copy()
-            draw_city_crosses_on_pil(pil_with_crosses, CITIES)
-            draw_subsolar_point_on_pil(pil_with_crosses, now)
-            draw_sublunar_point_on_pil(pil_with_crosses, now)
-            surface = pil_to_pygame_surface(pil_with_crosses)
+            draw_city_crosses_on_pil(pil_for_map, CITIES)
+            draw_subsolar_point_on_pil(pil_for_map, now)
+            draw_sublunar_point_on_pil(pil_for_map, now)
+            surface = pil_to_pygame_surface(pil_for_map)
             last_dt = now
 
-            surf = pygame.image.fromstring(pil_with_crosses.tobytes(), pil_with_crosses.size, pil_with_crosses.mode)
+            surf = pygame.image.fromstring(pil_for_map.tobytes(), pil_for_map.size, pil_for_map.mode)
+
             with lock:
                 terminator_surface = surf
+
             time.sleep(1.0 / UPDATE_FPS)
     return
 
