@@ -16,8 +16,7 @@ screen = pygame.display.set_mode((800, 480), pygame.FULLSCREEN)
 
 # --- load JPEG via PIL ---
 try:
-    img = Image.open("day.jpg")  # replace with your JPEG file
-    #img = Image.open("sonos.png")
+    img = Image.open("sonos.png")
     img = img.convert("RGB")
     img = img.resize(screen.get_size())  # scale to fit screen
     data = img.tobytes()

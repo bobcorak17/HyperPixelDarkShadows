@@ -141,7 +141,8 @@ def generate_terminator_pil(day_img: Image.Image,
     mask_array = mask_array.astype(np.uint8)
 
     # Apply Gaussian blur for twilight transition
-    mask_img = Image.fromarray(mask_array, mode="L")
+    #mask_img = Image.fromarray(mask_array, mode="L")
+    mask_img = Image.fromarray(mask_array.astype("uint8"))
     if twilight_blur > 0:
         mask_img = mask_img.filter(ImageFilter.GaussianBlur(radius=twilight_blur))
 
