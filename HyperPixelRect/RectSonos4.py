@@ -78,29 +78,30 @@ try:
                 if event.key == pygame.K_ESCAPE or event.unicode.lower() == 'q':
                     running = False
 
-        # handle Sonos events
-        try:
-            sonos_event = sub.events.get(timeout=0.1)
-            vars = sonos_event.variables
+        if running:
+            # handle Sonos events
+            try:
+                sonos_event = sub.events.get(timeout=0.1)
+                vars = sonos_event.variables
 
-            if "transport_state" in vars:
-                state = vars["transport_state"]
-                if state == "PLAYING":
+                if "transport_state" in vars:
+                    state = vars["transport_state"]
+                    if state == "PLAYING":
+                        new_surface = fetch_album_art(zone)
+                        if new_surface:
+                            current_surface = new_surface
+                    else:
+                        current_surface = None
+                    show_album_art(current_surface)
+
+                elif "current_track_meta_data" in vars and state == "PLAYING":
                     new_surface = fetch_album_art(zone)
                     if new_surface:
                         current_surface = new_surface
-                else:
-                    current_surface = None
-                show_album_art(current_surface)
+                        show_album_art(current_surface)
 
-            elif "current_track_meta_data" in vars and state == "PLAYING":
-                new_surface = fetch_album_art(zone)
-                if new_surface:
-                    current_surface = new_surface
-                    show_album_art(current_surface)
-
-        except Empty:
-            pass
+            except Empty:
+                pass
 
         clock.tick(30)
 
