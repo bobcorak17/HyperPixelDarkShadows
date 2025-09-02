@@ -1,28 +1,22 @@
-import os,io
+import pygame
 import requests
-import queue
+import io
+import signal
+import sys
 from PIL import Image
 from soco.discovery import by_name
 from soco.events import event_listener
-
-# must set this BEFORE importing pygame
-os.environ["PYGAME_HIDE_SUPPORT_PROMPT"] = "1"
-os.environ.setdefault("SDL_VIDEO_ALLOW_SCREENSAVER", "0")
-os.environ["SDL_VIDEO_WINDOW_POS"] = "0,0"
-os.environ["SDL_VIDEO_FOREIGN"] = "1"
-import pygame
+import queue
 
 # -------------------
 # Setup Sonos
 # -------------------
 ZONE_NAME = "Basement"
 
-# Connect to the Sonos player by name
 zone = by_name(ZONE_NAME)
 if zone is None:
     raise RuntimeError(f"Sonos zone '{ZONE_NAME}' not found")
 
-# Subscribe to AVTransport events
 sub = zone.avTransport.subscribe(auto_renew=True)
 
 # -------------------
@@ -35,13 +29,32 @@ pygame.mouse.set_visible(False)
 clock = pygame.time.Clock()
 
 running = True
-need_redraw = True  # only flip screen when necessary
+need_redraw = True
+
+# -------------------
+# Graceful Exit Handler
+# -------------------
+def cleanup_and_exit(*args):
+    global running
+    running = False
+    try:
+        sub.unsubscribe()
+    except Exception:
+        pass
+    try:
+        event_listener.stop()
+    except Exception:
+        pass
+    pygame.quit()
+    sys.exit(0)
+
+# Catch Ctrl-C
+signal.signal(signal.SIGINT, cleanup_and_exit)
 
 # -------------------
 # Helpers
 # -------------------
 def get_album_art_image(uri):
-    """Fetch Sonos album art and return as a Pygame Surface."""
     if not uri:
         return None
     if uri.startswith("http"):
@@ -53,7 +66,6 @@ def get_album_art_image(uri):
         response = requests.get(url, timeout=5)
         response.raise_for_status()
         image = Image.open(io.BytesIO(response.content))
-        # Scale to screen
         image = image.resize(screen.get_size(), Image.LANCZOS)
         return pygame.image.fromstring(image.tobytes(), image.size, image.mode).convert()
     except Exception as e:
@@ -64,7 +76,6 @@ def get_album_art_image(uri):
 # Main loop
 # -------------------
 while running:
-    # Handle Sonos events
     try:
         sonos_event = sub.events.get(timeout=0.5)
         if sonos_event is not None:
@@ -77,31 +88,20 @@ while running:
                     screen.blit(image, (0, 0))
                 need_redraw = True
             else:
-                # Not playing → blank screen
                 screen.fill((0, 0, 0))
                 need_redraw = True
     except queue.Empty:
         pass
 
-    # Handle quit keys/events
     for event in pygame.event.get():
         if event.type == pygame.QUIT:
-            running = False
+            cleanup_and_exit()
         elif event.type == pygame.KEYDOWN:
             if event.key == pygame.K_ESCAPE or event.unicode.lower() == 'q':
-                running = False
+                cleanup_and_exit()
 
-    # Only redraw when needed
     if need_redraw:
         pygame.display.flip()
         need_redraw = False
 
-    # Keep loop light
     clock.tick(10)
-
-# -------------------
-# Cleanup
-# -------------------
-sub.unsubscribe()
-event_listener.stop()
-pygame.quit()
